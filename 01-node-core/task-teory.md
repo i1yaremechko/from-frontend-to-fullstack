@@ -1,4 +1,4 @@
-##Теорія-мінімум
+## Теорія-мінімум
 
 - Runtime: V8 + libuv, single-thread JS + thread pool для I/O
 - Event loop: черги macrotask / microtask; чому await не блокує потік, а while(true) блокує
