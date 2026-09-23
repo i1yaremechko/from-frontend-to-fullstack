@@ -1,5 +1,5 @@
 {
-  "name": "v8engine-libuv",
+  "name": "event-loop",
   "version": "1.0.0",
   "description": "",
   "main": "index.js",

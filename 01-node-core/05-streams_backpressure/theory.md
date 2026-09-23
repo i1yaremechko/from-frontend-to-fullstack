@@ -131,3 +131,75 @@ compressFile();
 
 ---
 
+Ці два приклади демонструють **ідеальний сучасний підхід** до обробки даних у Node.js. Давайте розберемо їхню внутрішню механіку, щоб остаточно зафіксувати ці шаблони у вашому арсеналі FullStack-розробника.
+
+---
+
+## 1. Розбір Прикладу 1: Порядкове читання через `readline` та `for await...of`
+
+Цей паттерн є стандартом для обробки логів, CSV-файлів або будь-яких великих текстових даних.
+
+```javascript
+import { createReadStream } from 'node:fs';
+import { createInterface } from 'node:readline';
+
+const file = process.argv[2];
+if (!file) {
+  console.error('Usage: node count-lines.mjs <file>');
+  process.exit(1);
+}
+
+const rl = createInterface({
+  input: createReadStream(file, { encoding: 'utf8' }),
+  crlfDelay: Infinity, // ✅ Розпізнає \r\n як єдиний перехід рядка
+});
+
+let lines = 0;
+// Async Iterator послідовно витягує рядки з внутрішнього буфера
+for await (const line of rl) {
+  if (line.trim()) lines++;
+}
+console.log(`Non-empty lines: ${lines}`);
+
+```
+
+### Що відбувається під капотом:
+
+1. **`createReadStream(file)`** відкриває дескриптор файла і зчитує його не весь одразу, а шматками (**chunks**) по $64\text{ KB}$.
+2. **`readline.createInterface`** виступає в ролі парсера: він приймає $64\text{ KB}$ буфер, шукає в ньому символи переведення рядка (`\n` або `\r\n`) і розбиває сирі дані на окремі текстові рядки.
+3. **`crlfDelay: Infinity`** запобігає багам із розривом символів `\r` та `\n`, якщо вони випадково потрапили на межу двох різних chunks ($64\text{ KB}$).
+4. **`for await (const line of rl)`** — це використання **Async Iterator (асинхронного ітератора)**. Він читає з `rl` рядок за рядком. Якщо обробка рядка в циклі уповільниться (наприклад, ви робите `await db.insert(line)` всередині циклу), асинхронний ітератор **автоматично призупинить `ReadStream**`, реалізуючи **Backpressure** «з коробки».
+
+> **Витрати пам'яті:** Незалежно від того, чи важить ваш файл $10\text{ MB}$ чи $500\text{ GB}$, цей скрипт споживатиме лише біля **$20-30\text{ MB}$ RAM**, оскільки в пам'яті одночасно знаходиться тільки один поточний $64\text{ KB}$ chunk та один рядок.
+
+---
+
+## 2. Розбір Прикладу 2: `pipeline` з `stream/promises`
+
+Цей паттерн замінив застарілий метод `.pipe()`.
+
+```javascript
+import { pipeline } from 'node:stream/promises';
+import { createReadStream, createWriteStream } from 'node:fs';
+import { createGzip } from 'node:zlib';
+
+await pipeline(
+  createReadStream('big.log'), // 1. Readable
+  createGzip(),                // 2. Transform (Gzip)
+  createWriteStream('big.log.gz'), // 3. Writable
+);
+
+```
+
+### Чому `pipeline` значно кращий за старий `.pipe()`?
+
+В старому синтаксисі `readStream.pipe(gzip).pipe(writeStream)` існувало кілька критичних проблем:
+
+1. **Витоки ресурсів при помилках (Resource Leaks):** Якщо під час читання, стиснення чи запису ставалася помилка (наприклад, закінчилося місце на диску), `.pipe()` залишав дескриптори файлів відкритими.
+2. **Обробка помилок:** Потрібно було вішати `.on('error')` окремо на *кожен* потік у ланцюжку. Якщо забути про один з них — сервер падав з `Unhandled Error`.
+
+### Що робить `pipeline` автоматично:
+
+* **Автоматичний Backpressure:** Якщо `createWriteStream` не встигає записувати `.gz` файл на диск, `pipeline` зупиняє читання з `createReadStream`.
+* **Автоматичний Cleanup (GC):** Якщо виникає помилка або процес переривається, `pipeline` автоматично закриває (`destroy()`) усі потоки у ланцюжку і звільняє дескриптори.
+* **Підтримка `async/await`:** Оскільки імпортовано з `node:stream/promises`, функція повертає звичайний `Promise`, що дозволяє обгортати її у стандартні `try...catch` блоки.
